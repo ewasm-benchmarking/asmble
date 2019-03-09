@@ -2,6 +2,10 @@ package asmble.cli
 
 import asmble.compile.jvm.javaIdent
 import asmble.run.jvm.Module
+//import kotlin.system.getTimeMicros
+//import kotlin.system.getTimeMillis
+import kotlin.system.measureNanoTime
+import asmble.run.jvm.ScriptContext
 
 /**
  * This class provide ''invoke'' WASM code functionality.
@@ -38,18 +42,30 @@ open class Invoke : ScriptCommand<Invoke.Args>() {
 
     override fun run(args: Args) {
         // Compiles wasm to bytecode, do registrations and so on.
-        val ctx = prepareContext(args.scriptArgs)
-        // Instantiate the module
-        val module =
-            if (args.module == "<last-in-entry>") ctx.modules.lastOrNull() ?: error("No modules available")
-            else ctx.registrations[args.module] as? Module.Instance ?:
-                error("Unable to find module registered as ${args.module}")
-        // Just make sure the module is instantiated here...
-        val instance = module.instance(ctx)
+        // start compile time
+
+        lateinit var ctx: ScriptContext
+        lateinit var instance: Any
+        lateinit var moduleDotCls: Class<*>
+
+        val compileTimeElapsed = measureNanoTime {
+          ctx = prepareContext(args.scriptArgs)
+          // Instantiate the module
+          val localModule =
+              if (args.module == "<last-in-entry>") ctx.modules.lastOrNull() ?: error("No modules available")
+              else ctx.registrations[args.module] as? Module.Instance ?:
+                  error("Unable to find module registered as ${args.module}")
+          moduleDotCls = localModule.cls
+          // Just make sure the module is instantiated here...
+          instance = localModule.instance(ctx)
+        }
+
+        // print compile time
+        println("compile time: " + compileTimeElapsed + "ns")
         // If an export is provided, call it
         if (args.export != "<start-func>") args.export.javaIdent.let { javaName ->
             // Finds java method(wasm fn) in class(wasm module) by name(declared in <start-func>)
-            val method = module.cls.declaredMethods.find { it.name == javaName } ?: error("Unable to find export '${args.export}'")
+            val method = moduleDotCls.declaredMethods.find { it.name == javaName } ?: error("Unable to find export '${args.export}'")
             // Map args to params
             require(method.parameterTypes.size == args.args.size) {
                 "Given arg count of ${args.args.size} is invalid for $method"
@@ -63,8 +79,13 @@ open class Invoke : ScriptCommand<Invoke.Args>() {
                     else -> error("Unrecognized type for param ${index + 1}: $paramType")
                 }
             }
-            val result = method.invoke(instance, *params.toTypedArray())
-            if (args.resultToStdout && method.returnType != Void.TYPE) println(result)
+            // start run time
+            val execTimeElapsed = measureNanoTime {
+                val result = method.invoke(instance, *params.toTypedArray())
+                if (args.resultToStdout && method.returnType != Void.TYPE) println(result)
+            }
+            // print exec time
+            println("exec time: " + execTimeElapsed + "ns")
         }
     }
 
